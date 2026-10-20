@@ -1,0 +1,63 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f3eee6;
+  --foreground: #241c17;
+  --card: #fffdf8;
+  --muted: #6f645b;
+  --line: #e3d6c6;
+  --seal: #9d2c2c;
+  --seal-ink: #fff6ee;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-seal: var(--seal);
+  --color-seal-ink: var(--seal-ink);
+  --font-sans: var(--font-noto-sans), "Noto Sans CJK TC", "Noto Sans TC", sans-serif;
+  --font-serif: var(--font-noto-serif), "Noto Serif CJK TC", "Noto Serif TC", serif;
+}
+
+body {
+  background:
+    radial-gradient(1100px 480px at 0% -10%, #f8e4cf 0%, transparent 55%),
+    radial-gradient(900px 420px at 100% 0%, #e5f0e4 0%, transparent 46%),
+    var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+
+.seal {
+  display: grid;
+  width: 2.5rem;
+  height: 2.5rem;
+  flex: none;
+  place-items: center;
+  border-radius: 0.45rem;
+  background: var(--seal);
+  color: var(--seal-ink);
+  font-family: var(--font-serif);
+  font-size: 1.15rem;
+  line-height: 1;
+  box-shadow: 2px 2px 0 #6d1d1d;
+}
+
+::selection {
+  background: #efc7b4;
+}
+
+.select-field {
+  padding-right: 2.25rem;
+  background-image:
+    linear-gradient(45deg, transparent 50%, #6f645b 50%),
+    linear-gradient(135deg, #6f645b 50%, transparent 50%);
+  background-position:
+    calc(100% - 1.1rem) 55%,
+    calc(100% - 0.75rem) 55%;
+  background-size: 0.35rem 0.35rem, 0.35rem 0.35rem;
+  background-repeat: no-repeat;
+}
