@@ -1,8 +1,12 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  ...(process.env.NEXT_STANDALONE === "1" ? { output: "standalone" as const } : {}),
   allowedDevOrigins: ["127.0.0.1"],
-  serverExternalPackages: ["@prisma/client", "prisma", "bcryptjs"],
+  serverExternalPackages: ["@prisma/client", "prisma", "bcryptjs", "@aws-sdk/client-s3"],
+  experimental: {
+    proxyClientMaxBodySize: "80mb",
+  },
   turbopack: {
     rules: {
       "*.css": {

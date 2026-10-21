@@ -1,11 +1,15 @@
 import type { PrismaClient } from "@prisma/client";
 import {
+  appBaseUrl,
   buildCloseEmail,
   categoryById,
+  closeRecipientEmails,
   isStatus,
   nextStatus,
   peopleToStorage,
   toEventRecord,
+  type CloseAudience,
+  type CloseTimelineItem,
   type EventInput,
   type EventRecord,
 } from "@/lib/domain";
@@ -73,8 +77,10 @@ export async function advanceEvent(
     env?: NodeJS.ProcessEnv;
     logger?: (line: string) => void;
     now?: Date;
+    audience?: CloseAudience;
+    appUrl?: string;
   } = {},
-): Promise<{ ok: true; email: "log" | "smtp" | "failed" | null } | { ok: false; error: string }> {
+): Promise<{ ok: true; email: "log" | "smtp" | "failed" | null; recipients: string[] } | { ok: false; error: string }> {
   const row = await db.event.findFirst({
     where: { id, userId },
     include: { user: { select: { email: true } } },
@@ -90,33 +96,72 @@ export async function advanceEvent(
       data: { status: next },
     });
     if (updated.count !== 1) return { ok: false, error: "狀態已變更，請重新整理" };
-    return { ok: true, email: null };
+    return { ok: true, email: null, recipients: [] };
   }
 
+  const audience: CloseAudience = options.audience === "group" ? "group" : "self";
+  const participants = await db.eventParticipant.findMany({
+    where: { eventId: id },
+    include: { user: { select: { email: true } } },
+  });
+  const entries = await db.timelineEntry.findMany({
+    where: { eventId: id },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    include: {
+      author: { select: { name: true } },
+      attachments: { orderBy: { createdAt: "asc" } },
+    },
+  });
+  const env = options.env ?? process.env;
+  const appUrl = (options.appUrl ?? appBaseUrl(env)).replace(/\/$/, "");
+  const timeline: CloseTimelineItem[] = entries.map((entry) => ({
+    authorName: entry.author.name,
+    createdAt: entry.createdAt,
+    body: entry.body,
+    attachments: entry.attachments.map((file) => ({
+      fileName: file.fileName,
+      url: `${appUrl}/api/attachments/${file.id}`,
+    })),
+  }));
+  const recipients = closeRecipientEmails(
+    audience,
+    row.user.email,
+    participants.map((participant) => participant.user.email),
+  );
   const category = categoryById(row.category);
   const closedAt = options.now ?? new Date();
   const record = toEventRecord(row);
-  const message = buildCloseEmail({
-    to: row.user.email,
-    title: row.title,
-    description: row.description,
-    categoryLabel: category?.label ?? row.category,
-    people: record?.people ?? [],
-    occurredAt: row.occurredAt,
-    amountCents: row.amountCents,
-    closedAt,
-  });
+  const messages = recipients.map((to) =>
+    buildCloseEmail({
+      to,
+      title: row.title,
+      description: row.description,
+      categoryLabel: category?.label ?? row.category,
+      people: record?.people ?? [],
+      occurredAt: row.occurredAt,
+      amountCents: row.amountCents,
+      closedAt,
+      timeline,
+      audience,
+    }),
+  );
   const logger = options.logger ?? console.log;
-  let email: "log" | "smtp" | "failed" = "log";
-  let emailError: string | null = null;
-  try {
-    const result = await deliverEmail(message, options.env ?? process.env, logger);
-    email = result.mode;
-  } catch (error) {
-    email = "failed";
-    emailError = error instanceof Error ? error.message : "寄信失敗";
-    logger(`瞎謎寄信失敗：${emailError}\n${message.text}`);
+  const errors: string[] = [];
+  let anySmtp = false;
+  for (const message of messages) {
+    try {
+      const result = await deliverEmail(message, env, logger);
+      if (result.mode === "smtp") anySmtp = true;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "寄信失敗";
+      errors.push(`${message.to}: ${reason}`);
+      logger(`瞎謎寄信失敗：${reason}\n${message.text}`);
+    }
   }
+  let email: "log" | "smtp" | "failed" = "log";
+  if (errors.length > 0) email = "failed";
+  else if (anySmtp) email = "smtp";
+  const emailError = errors.length > 0 ? errors.join("；") : null;
 
   const updated = await db.event.updateMany({
     where: { id, userId, status: row.status },
@@ -125,8 +170,9 @@ export async function advanceEvent(
       closedAt,
       emailDelivery: email,
       emailError,
+      emailAudience: audience,
     },
   });
   if (updated.count !== 1) return { ok: false, error: "狀態已變更，請重新整理" };
-  return { ok: true, email };
+  return { ok: true, email, recipients };
 }

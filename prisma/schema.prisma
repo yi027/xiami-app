@@ -1,38 +1,101 @@
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
 model User {
+  id                  String             @id @default(cuid())
+  email               String             @unique
+  name                String
+  passwordHash        String
+  createdAt           DateTime           @default(now())
+  events              Event[]
+  sentFriendships     Friendship[]       @relation("FriendshipRequester")
+  receivedFriendships Friendship[]       @relation("FriendshipAddressee")
+  participations      EventParticipant[]
+  timelineEntries     TimelineEntry[]
+}
+
+model Friendship {
   id           String   @id @default(cuid())
-  email        String   @unique
-  name         String
-  passwordHash String
+  requesterId  String
+  requester    User     @relation("FriendshipRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  addresseeId  String?
+  addressee    User?    @relation("FriendshipAddressee", fields: [addresseeId], references: [id], onDelete: Cascade)
+  inviteeEmail String
+  status       String
   createdAt    DateTime @default(now())
-  events       Event[]
+  updatedAt    DateTime @updatedAt
+
+  @@unique([requesterId, inviteeEmail])
+  @@index([inviteeEmail, status])
+  @@index([addresseeId, status])
 }
 
 model Event {
-  id            String    @id @default(cuid())
+  id            String             @id @default(cuid())
   userId        String
-  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
   title         String
-  description   String    @default("")
+  description   String             @default("")
   status        String
   category      String
-  amountCents   Int       @default(0)
+  amountCents   Int                @default(0)
   occurredAt    DateTime
-  people        String    @default("[]")
+  people        String             @default("[]")
   closedAt      DateTime?
   emailDelivery String?
   emailError    String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  emailAudience String?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  participants  EventParticipant[]
+  timeline      TimelineEntry[]
 
   @@index([userId, occurredAt])
   @@index([userId, status])
+}
+
+model EventParticipant {
+  id        String   @id @default(cuid())
+  eventId   String
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([eventId, userId])
+  @@index([userId])
+}
+
+model TimelineEntry {
+  id          String       @id @default(cuid())
+  eventId     String
+  event       Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  authorId    String
+  author      User         @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  body        String       @default("")
+  createdAt   DateTime     @default(now())
+  attachments Attachment[]
+
+  @@index([eventId, createdAt])
+}
+
+model Attachment {
+  id          String        @id @default(cuid())
+  entryId     String
+  entry       TimelineEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  storageKey  String        @unique
+  fileName    String
+  contentType String
+  sizeBytes   Int
+  kind        String
+  createdAt   DateTime      @default(now())
+
+  @@index([entryId])
 }

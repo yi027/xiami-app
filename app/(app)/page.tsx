@@ -8,7 +8,9 @@ import {
   matchesFilter,
   parseEventFilter,
   STATUS_LABEL,
+  type EventRecord,
 } from "@/lib/domain";
+import { listSharedEvents } from "@/lib/access";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { listOwnedEvents } from "@/lib/events";
@@ -37,6 +39,7 @@ async function EventHome({
   const params = await searchParams;
   const { filter, fromText, toText, q } = parseEventFilter(params);
   const events = (await listOwnedEvents(prisma, user.id)).filter((event) => matchesFilter(event, filter));
+  const shared = (await listSharedEvents(prisma, user.id)).filter((event) => matchesFilter(event, filter));
   const filtered = Boolean(q || filter.status || filter.category || filter.from || filter.to);
 
   return (
@@ -46,7 +49,7 @@ async function EventHome({
           <p className="text-sm text-muted">{user.name}的紀事</p>
           <h1 className="font-serif text-3xl">事件</h1>
         </div>
-        <p className="text-sm text-muted">{events.length} 筆</p>
+        <p className="text-sm text-muted">{events.length + shared.length} 筆</p>
       </div>
       <ul className="flex flex-wrap gap-2" aria-label="類別顏色">
         {CATEGORIES.map((category) => (
@@ -68,7 +71,7 @@ async function EventHome({
         from={fromText}
         to={toText}
       />
-      {events.length === 0 ? (
+      {events.length === 0 && shared.length === 0 ? (
         <div className="rounded-3xl border border-dashed border-line bg-card px-6 py-16 text-center">
           <h2 className="font-serif text-2xl">{filtered ? "沒有符合條件的事件" : "還沒有事件"}</h2>
           <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-muted">
@@ -80,6 +83,36 @@ async function EventHome({
             </Link>
           ) : null}
         </div>
+      ) : (
+        <div className="space-y-6">
+          <EventList title="我的事件" events={events} empty="你建立的事件沒有符合這個條件。" />
+          {shared.length > 0 ? (
+            <EventList
+              title="與我分享"
+              events={shared.map((event) => ({ ...event, note: `${event.ownerName}分享` }))}
+              empty=""
+            />
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EventList({
+  title,
+  events,
+  empty,
+}: {
+  title: string;
+  events: Array<EventRecord & { note?: string }>;
+  empty: string;
+}) {
+  return (
+    <section className="space-y-3">
+      <h2 className="font-serif text-2xl">{title}</h2>
+      {events.length === 0 ? (
+        <p className="text-sm text-muted">{empty}</p>
       ) : (
         <ul className="grid gap-3">
           {events.map((event) => {
@@ -102,6 +135,7 @@ async function EventHome({
                     <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-[#4d433c]">
                       <span className="rounded-full bg-white/80 px-2 py-0.5 text-xs">{STATUS_LABEL[event.status]}</span>
                       <span>{formatTaipeiShort(event.occurredAt)}</span>
+                      {event.note ? <span>{event.note}</span> : null}
                       {event.people.length > 0 ? <span className="truncate">{event.people.join("、")}</span> : null}
                     </span>
                   </span>
@@ -112,6 +146,6 @@ async function EventHome({
           })}
         </ul>
       )}
-    </div>
+    </section>
   );
 }

@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 
 const links = [
   { href: "/", label: "事件" },
+  { href: "/friends", label: "好友" },
   { href: "/stats", label: "統計" },
 ];
 
@@ -71,7 +72,7 @@ export function AppShell({
         className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-[#fffdf8]/95 backdrop-blur md:hidden"
         aria-label="手機"
       >
-        <div className="mx-auto grid max-w-5xl grid-cols-2">
+        <div className="mx-auto grid max-w-5xl grid-cols-3">
           {links.map((link) => (
             <Link
               key={link.href}
