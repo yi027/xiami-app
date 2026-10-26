@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   CATEGORIES,
   buildCloseEmail,
+  buildInviteEmail,
   canTransition,
+  closeRecipientEmails,
   centsToInput,
   formatTwd,
   matchesFilter,
@@ -30,6 +32,7 @@ function sample(overrides: Partial<EventRecord> = {}): EventRecord {
     closedAt: null,
     emailDelivery: null,
     emailError: null,
+    emailAudience: null,
     ...overrides,
   };
 }
@@ -140,6 +143,54 @@ describe("forms and email", () => {
     expect(message.text).toContain("阿凱");
     expect(message.html).toContain("&lt;早餐&gt;");
     expect(message.html).not.toContain("<早餐>");
+    expect(message.text).toContain("時間軸：");
+    expect(message.text).toContain("這封信只寄給建立者。");
+  });
+
+  it("chooses close-email recipients and escapes the timeline", () => {
+    expect(closeRecipientEmails("self", "Owner@Xiami.app", ["friend@xiami.app"])).toEqual(["owner@xiami.app"]);
+    expect(closeRecipientEmails("group", "owner@xiami.app", ["friend@xiami.app", "owner@xiami.app"])).toEqual([
+      "owner@xiami.app",
+      "friend@xiami.app",
+    ]);
+    const occurredAt = taipeiLocalToDate("2026-10-20T08:30");
+    const message = buildCloseEmail({
+      to: "friend@xiami.app",
+      title: "分享的晚餐",
+      description: "一起吃",
+      categoryLabel: "食",
+      people: [],
+      occurredAt,
+      amountCents: 1000,
+      closedAt: occurredAt,
+      audience: "group",
+      timeline: [
+        {
+          authorName: "朋友",
+          createdAt: occurredAt,
+          body: "<script>alert(1)</script>",
+          attachments: [{ fileName: "照片.png", url: "http://app.test/api/attachments/a1" }],
+        },
+      ],
+    });
+    expect(message.text).toContain("這封信寄給事件的建立者與參與者。");
+    expect(message.text).toContain("http://app.test/api/attachments/a1");
+    expect(message.text).toContain("照片.png");
+    expect(message.html).toContain("&lt;script&gt;");
+    expect(message.html).not.toContain("<script>");
+  });
+
+  it("builds a friend invitation", () => {
+    const message = buildInviteEmail({
+      to: "new@xiami.app",
+      fromName: "林可恩",
+      fromEmail: "demo@xiami.app",
+      appUrl: "http://app.test",
+    });
+    expect(message.to).toBe("new@xiami.app");
+    expect(message.text).toContain("http://app.test/register");
+    expect(message.text).toContain("http://app.test/friends");
+    expect(message.subject).toContain("林可恩");
   });
 
   it("blocks open redirects", () => {

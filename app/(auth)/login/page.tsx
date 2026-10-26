@@ -28,7 +28,7 @@ async function Login({
   return (
     <AuthScreen
       title="登入"
-      lede="用你的電子郵件進來。每個人只看得到自己的事件。"
+      lede="用你的電子郵件進來。自己建立的事件預設只有你看得到；分享給好友後，對方可以一起留下紀錄。"
     >
       <LoginForm nextPath={nextPath} />
       <aside className="mt-6 rounded-2xl bg-[#f6efe6] px-4 py-3 text-sm leading-6 text-[#5c5148]">

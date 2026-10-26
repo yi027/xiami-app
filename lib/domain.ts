@@ -20,6 +20,7 @@ export const STATUS_LABEL: Record<Status, string> = {
 };
 
 export type EmailDelivery = "log" | "smtp" | "failed";
+export type CloseAudience = "self" | "group";
 
 export type EventRecord = {
   id: string;
@@ -34,6 +35,7 @@ export type EventRecord = {
   closedAt: Date | null;
   emailDelivery: EmailDelivery | null;
   emailError: string | null;
+  emailAudience: CloseAudience | null;
 };
 
 export type EventFilter = {
@@ -254,8 +256,16 @@ export function summarize(events: EventRecord[], filter: EventFilter = {}) {
   };
 }
 
+export function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
 export function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 120;
+}
+
+export function appBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+  return (env.APP_URL ?? "").trim().replace(/\/$/, "");
 }
 
 export function validatePassword(password: string): string | null {
@@ -306,6 +316,13 @@ export function ownedWhere(userId: string, id?: string) {
   return id ? { id, userId } : { userId };
 }
 
+export type CloseTimelineItem = {
+  authorName: string;
+  createdAt: Date;
+  body: string;
+  attachments: { fileName: string; url: string }[];
+};
+
 export type CloseEmailInput = {
   title: string;
   description: string;
@@ -315,7 +332,20 @@ export type CloseEmailInput = {
   amountCents: number;
   closedAt: Date;
   to: string;
+  timeline?: CloseTimelineItem[];
+  audience?: CloseAudience;
 };
+
+export function closeRecipientEmails(audience: CloseAudience, ownerEmail: string, participantEmails: string[]): string[] {
+  const owner = normalizeEmail(ownerEmail);
+  if (audience !== "group") return owner ? [owner] : [];
+  const recipients = owner ? [owner] : [];
+  for (const email of participantEmails) {
+    const normalized = normalizeEmail(email);
+    if (normalized && !recipients.includes(normalized)) recipients.push(normalized);
+  }
+  return recipients;
+}
 
 export function escapeHtml(value: string): string {
   return value
@@ -331,9 +361,25 @@ export function buildCloseEmail(input: CloseEmailInput) {
   const amount = formatTwd(input.amountCents);
   const occurred = formatTaipei(input.occurredAt);
   const closed = formatTaipei(input.closedAt);
+  const audienceLine =
+    input.audience === "group" ? "這封信寄給事件的建立者與參與者。" : "這封信只寄給建立者。";
+  const timeline = input.timeline ?? [];
   const subject = `【瞎謎】事件已結案：${input.title.replace(/[\r\n]/g, " ")}`;
+  const timelineText =
+    timeline.length === 0
+      ? "時間軸：\n（尚無紀錄）"
+      : [
+          "時間軸：",
+          ...timeline.flatMap((item) => {
+            const lines = [`- ${formatTaipei(item.createdAt)} ${item.authorName}`];
+            if (item.body.trim()) lines.push(`  ${item.body.trim()}`);
+            for (const file of item.attachments) lines.push(`  附件：${file.fileName} ${file.url}`);
+            return lines;
+          }),
+        ].join("\n");
   const text = [
     "這封信是瞎謎-APP 在事件結案時自動寄出的紀錄。",
+    audienceLine,
     "",
     `標題：${input.title}`,
     `類別：${input.categoryLabel}`,
@@ -345,11 +391,28 @@ export function buildCloseEmail(input: CloseEmailInput) {
     "",
     "描述：",
     description,
+    "",
+    timelineText,
   ].join("\n");
   const row = (label: string, value: string) =>
     `<tr><th align="left" style="padding:6px 12px 6px 0;color:#6f645b;font-weight:500;">${label}</th><td style="padding:6px 0;">${escapeHtml(value)}</td></tr>`;
+  const timelineHtml =
+    timeline.length === 0
+      ? "<p>時間軸：（尚無紀錄）</p>"
+      : `<h2 style="font-size:16px;">時間軸</h2><ol>${timeline
+          .map((item) => {
+            const files = item.attachments
+              .map(
+                (file) =>
+                  `<li><a href="${escapeHtml(file.url)}">${escapeHtml(file.fileName)}</a></li>`,
+              )
+              .join("");
+            return `<li><strong>${escapeHtml(item.authorName)}</strong> · ${escapeHtml(formatTaipei(item.createdAt))}<div style="white-space:pre-wrap;">${escapeHtml(item.body)}</div>${files ? `<ul>${files}</ul>` : ""}</li>`;
+          })
+          .join("")}</ol>`;
   const html = `<div style="font-family:'Noto Sans TC',sans-serif;color:#241c17;line-height:1.6;">
 <p>這封信是瞎謎-APP 在事件結案時自動寄出的紀錄。</p>
+<p>${audienceLine}</p>
 <table style="border-collapse:collapse;">
 ${row("標題", input.title)}
 ${row("類別", input.categoryLabel)}
@@ -361,6 +424,28 @@ ${row("相關人員", people)}
 </table>
 <p style="margin-bottom:4px;">描述：</p>
 <p style="white-space:pre-wrap;">${escapeHtml(description)}</p>
+${timelineHtml}
+</div>`;
+  return { to: input.to, subject, text, html };
+}
+
+export function buildInviteEmail(input: { to: string; fromName: string; fromEmail: string; appUrl: string }) {
+  const friendsUrl = input.appUrl ? `${input.appUrl}/friends` : "/friends";
+  const registerUrl = input.appUrl ? `${input.appUrl}/register` : "/register";
+  const subject = `【瞎謎】${input.fromName.replace(/[\r\n]/g, " ")} 邀請你成為好友`;
+  const text = [
+    `${input.fromName}（${input.fromEmail}）想在瞎謎-APP 加你為好友。`,
+    "",
+    "若你已經有帳號，登入後到「好友」頁接受或婉拒。",
+    "若還沒有帳號，請用這封信的收件電子郵件註冊，登入後就能看到邀請。",
+    "",
+    `好友頁：${friendsUrl}`,
+    `註冊：${registerUrl}`,
+  ].join("\n");
+  const html = `<div style="font-family:'Noto Sans TC',sans-serif;color:#241c17;line-height:1.6;">
+<p><strong>${escapeHtml(input.fromName)}</strong>（${escapeHtml(input.fromEmail)}）想在瞎謎-APP 加你為好友。</p>
+<p>若你已經有帳號，登入後到「好友」頁接受或婉拒。若還沒有帳號，請用這封信的收件電子郵件註冊，登入後就能看到邀請。</p>
+<p><a href="${escapeHtml(friendsUrl)}">打開好友頁</a> · <a href="${escapeHtml(registerUrl)}">註冊</a></p>
 </div>`;
   return { to: input.to, subject, text, html };
 }
@@ -378,6 +463,7 @@ export type EventRow = {
   closedAt: Date | null;
   emailDelivery: string | null;
   emailError: string | null;
+  emailAudience: string | null;
 };
 
 export function toEventRecord(row: EventRow): EventRecord | null {
@@ -386,6 +472,7 @@ export function toEventRecord(row: EventRow): EventRecord | null {
     row.emailDelivery === "log" || row.emailDelivery === "smtp" || row.emailDelivery === "failed"
       ? row.emailDelivery
       : null;
+  const emailAudience = row.emailAudience === "self" || row.emailAudience === "group" ? row.emailAudience : null;
   return {
     id: row.id,
     userId: row.userId,
@@ -399,5 +486,6 @@ export function toEventRecord(row: EventRow): EventRecord | null {
     closedAt: row.closedAt,
     emailDelivery,
     emailError: row.emailError,
+    emailAudience,
   };
 }

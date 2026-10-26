@@ -1,9 +1,4 @@
-import { execSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { PrismaClient } from "@prisma/client";
+import { afterAll, describe, expect, it } from "vitest";
 import { peopleToStorage } from "../lib/domain";
 import {
   advanceEvent,
@@ -13,37 +8,16 @@ import {
   listOwnedEvents,
   updateEvent,
 } from "../lib/events";
-
-const dir = mkdtempSync(path.join(tmpdir(), "xiami-"));
-const databaseUrl = `file:${path.join(dir, "test.db")}`;
-process.env.DATABASE_URL = databaseUrl;
-process.env.AUTH_SECRET = "test-secret-not-for-production";
-
-let prisma: PrismaClient;
-
-beforeAll(async () => {
-  execSync("npx prisma db push --skip-generate --accept-data-loss", {
-    cwd: process.cwd(),
-    env: { ...process.env, DATABASE_URL: databaseUrl },
-    stdio: "pipe",
-  });
-  const { PrismaClient: Client } = await import("@prisma/client");
-  prisma = new Client({ datasources: { db: { url: databaseUrl } } });
-}, 60_000);
+import { makeUser, prisma } from "./helpers";
 
 afterAll(async () => {
-  await prisma?.$disconnect();
-  rmSync(dir, { recursive: true, force: true });
+  await prisma.$disconnect();
 });
 
 describe("per-user events and closing email", () => {
   it("hides other users' events and logs the close email without SMTP", async () => {
-    const owner = await prisma.user.create({
-      data: { email: "owner@test.app", name: "本人", passwordHash: "x" },
-    });
-    const stranger = await prisma.user.create({
-      data: { email: "stranger@test.app", name: "他人", passwordHash: "x" },
-    });
+    const owner = await makeUser("本人");
+    const stranger = await makeUser("他人");
     const created = await createEvent(prisma, owner.id, {
       title: "加班計程車",
       description: "末班車沒了",
@@ -86,7 +60,7 @@ describe("per-user events and closing email", () => {
       logger: (line) => lines.push(line),
       now: new Date("2026-10-19T02:00:00.000Z"),
     });
-    expect(closed).toEqual({ ok: true, email: "log" });
+    expect(closed).toMatchObject({ ok: true, email: "log", recipients: [owner.email] });
     expect(lines.join("\n")).toContain("未設定 SMTP");
     expect(lines.join("\n")).toContain("加班計程車");
     expect(lines.join("\n")).toContain("同事");
@@ -94,6 +68,7 @@ describe("per-user events and closing email", () => {
     const stored = await prisma.event.findFirstOrThrow({ where: { id: created.id } });
     expect(stored.status).toBe("closed");
     expect(stored.emailDelivery).toBe("log");
+    expect(stored.emailAudience).toBe("self");
     expect(stored.closedAt?.toISOString()).toBe("2026-10-19T02:00:00.000Z");
     expect(stored.userId).toBe(owner.id);
     expect((await advanceEvent(prisma, owner.id, created.id)).ok).toBe(false);
