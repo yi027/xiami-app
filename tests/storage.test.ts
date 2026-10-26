@@ -87,6 +87,25 @@ describe("s3-compatible config", () => {
   });
 });
 
+describe("gcs config", () => {
+  it("reads the native Cloud Storage driver without touching the network", () => {
+    expect(readStorageConfig({ STORAGE_DRIVER: "gcs", GCS_BUCKET: "xiami-uploads", GCS_PROJECT_ID: "demo" })).toEqual({
+      driver: "gcs",
+      bucket: "xiami-uploads",
+      projectId: "demo",
+    });
+    expect(readStorageConfig({ STORAGE_DRIVER: "gcs", GCS_BUCKET: "xiami-uploads" })).toEqual({
+      driver: "gcs",
+      bucket: "xiami-uploads",
+      projectId: undefined,
+    });
+    const storage = createStorage({ driver: "gcs", bucket: "xiami-uploads" });
+    expect(storage).toBeTruthy();
+    expect(() => readStorageConfig({ STORAGE_DRIVER: "gcs" })).toThrow(/GCS_BUCKET/);
+    expect(() => readStorageConfig({ STORAGE_DRIVER: "ftp" })).toThrow(/STORAGE_DRIVER/);
+  });
+});
+
 describe("byte ranges", () => {
   it("parses open, closed, and suffix ranges", () => {
     expect(parseByteRange(null, 10)).toBeNull();
