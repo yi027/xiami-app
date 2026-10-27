@@ -8,6 +8,7 @@ import {
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
+import { Storage } from "@google-cloud/storage";
 
 export type ByteRange = { start: number; end: number };
 
@@ -35,12 +36,19 @@ export type StorageConfig =
       forcePathStyle: boolean;
       accessKeyId: string;
       secretAccessKey: string;
-    };
+    }
+  | { driver: "gcs"; bucket: string; projectId?: string };
 
 export function readStorageConfig(env: NodeJS.ProcessEnv = process.env): StorageConfig {
   const driver = (env.STORAGE_DRIVER ?? "local").trim().toLowerCase() || "local";
   if (driver === "local") {
     return { driver: "local", dir: env.STORAGE_LOCAL_DIR?.trim() || path.join(process.cwd(), "data", "uploads") };
+  }
+  if (driver === "gcs") {
+    const bucket = env.GCS_BUCKET?.trim() ?? "";
+    if (!bucket) throw new Error("GCS 儲存需要 GCS_BUCKET");
+    const projectId = env.GCS_PROJECT_ID?.trim() || undefined;
+    return { driver: "gcs", bucket, projectId };
   }
   if (driver !== "s3") {
     throw new Error(`不支援的 STORAGE_DRIVER：${driver}`);
@@ -89,6 +97,7 @@ export function assertSafeKey(key: string) {
 
 export function createStorage(config: StorageConfig = readStorageConfig()): ObjectStorage {
   if (config.driver === "local") return new LocalStorage(config.dir);
+  if (config.driver === "gcs") return new GcsStorage(config);
   return new S3Storage(config);
 }
 
@@ -184,6 +193,54 @@ class LocalStorage implements ObjectStorage {
   }
 }
 
+class GcsStorage implements ObjectStorage {
+  private readonly bucket;
+
+  constructor(config: Extract<StorageConfig, { driver: "gcs" }>) {
+    const storage = new Storage(config.projectId ? { projectId: config.projectId } : {});
+    this.bucket = storage.bucket(config.bucket);
+  }
+
+  async put(key: string, body: Uint8Array) {
+    assertSafeKey(key);
+    await this.bucket.file(key).save(Buffer.from(body), { resumable: false });
+  }
+
+  async size(key: string) {
+    assertSafeKey(key);
+    try {
+      const [metadata] = await this.bucket.file(key).getMetadata();
+      return Number(metadata.size ?? 0);
+    } catch (error) {
+      if (isGcsNotFound(error)) return null;
+      throw error;
+    }
+  }
+
+  async get(key: string, range?: ByteRange) {
+    assertSafeKey(key);
+    const file = this.bucket.file(key);
+    try {
+      const [metadata] = await file.getMetadata();
+      const total = Number(metadata.size ?? 0);
+      if (total === 0) return { body: new Uint8Array(), start: 0, end: 0, total: 0 };
+      const start = range?.start ?? 0;
+      const end = Math.min(range?.end ?? total - 1, total - 1);
+      if (start > end || start >= total) return null;
+      const [downloaded] = await file.download({ start, end });
+      return { body: new Uint8Array(downloaded), start, end, total };
+    } catch (error) {
+      if (isGcsNotFound(error)) return null;
+      throw error;
+    }
+  }
+
+  async delete(key: string) {
+    assertSafeKey(key);
+    await this.bucket.file(key).delete({ ignoreNotFound: true });
+  }
+}
+
 class S3Storage implements ObjectStorage {
   private readonly client: S3Client;
 
@@ -265,6 +322,11 @@ function totalFromRange(header?: string) {
 
 function isNotFound(error: unknown) {
   return Boolean(error && typeof error === "object" && "code" in error && (error as { code?: string }).code === "ENOENT");
+}
+
+function isGcsNotFound(error: unknown) {
+  if (!error || typeof error !== "object" || !("code" in error)) return false;
+  return Number((error as { code?: number | string }).code) === 404;
 }
 
 function isMissingObject(error: unknown) {

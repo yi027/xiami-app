@@ -215,15 +215,15 @@ Create PostgreSQL, build this Dockerfile, set the same variables as `.env.exampl
 Push the image to any registry and run it on:
 
 - AWS ECS 或 App Runner，前面加 ALB。資料庫用 RDS PostgreSQL 或相容服務。檔案用 S3，`S3_ENDPOINT` 留空。
-- Google Cloud Run 或 GKE。資料庫用 Cloud SQL PostgreSQL。檔案可用 GCS 的 S3 interoperability endpoint `https://storage.googleapis.com` 與 HMAC 金鑰。
+- Google Cloud Run。逐步設定、Workload Identity Federation 與費用粗估見 [docs/deploy-gcp.md](docs/deploy-gcp.md)。推到 `main` 且已設定 `GCP_PROJECT_ID` 時，`.github/workflows/deploy-gcp.yml` 會建置映像、用 Cloud Run Job 執行 migration，再部署服務。資料庫用 Cloud SQL PostgreSQL（Unix socket）。檔案用 `STORAGE_DRIVER=gcs`（執行身分，不需要 HMAC）；既有的 S3 interoperability（`https://storage.googleapis.com` 加 HMAC）仍然可用。GKE 也可跑同一份映像。
 - Azure Container Apps 或 AKS。資料庫用 Azure Database for PostgreSQL。檔案可用 MinIO、Cloudflare R2，或任何 S3 相容端點。Azure Blob 沒有原生 S3 API，請用相容閘道或改放 R2／S3。
 
-AWS ECS or App Runner with RDS and S3. Google Cloud Run or GKE with Cloud SQL and the GCS S3 interoperability endpoint. Azure Container Apps or AKS with Azure Database for PostgreSQL and an S3-compatible store such as MinIO or R2. Azure Blob itself has no S3 API.
+AWS ECS or App Runner with RDS and S3. Google Cloud Run with Cloud SQL and native Cloud Storage (`docs/deploy-gcp.md`); GCS S3 interoperability still works. GKE can run the same image. Azure Container Apps or AKS with Azure Database for PostgreSQL and an S3-compatible store such as MinIO or R2. Azure Blob itself has no S3 API.
 
 不論哪一家，程序都一樣：建置映像、設定環境變數、讓容器能連上 Postgres、由入口執行 migration、把 `APP_URL` 設成對外網址。不要把雲端帳號金鑰寫進映像。
 
 On every cloud: build the image, set environment variables, let the container reach Postgres, migrate from the entrypoint, and set `APP_URL` to the public origin. Do not bake cloud credentials into the image.
 
-GitHub Actions（`.github/workflows/ci.yml`）會安裝依賴、lint、型別檢查、測試、建置 Next.js，並建置 Docker 映像。
+GitHub Actions（`.github/workflows/ci.yml`）會安裝依賴、lint、型別檢查、測試、建置 Next.js，並建置 Docker 映像。Cloud Run 部署是另一個 workflow，只有設定 GCP 變數後才會在推上 `main` 時執行，不會影響 Vercel、Render、Fly.io、Zeabur 或其他容器平台。
 
-GitHub Actions (`.github/workflows/ci.yml`) installs dependencies, then lints, typechecks, tests, builds Next.js, and builds the Docker image.
+GitHub Actions (`.github/workflows/ci.yml`) installs dependencies, then lints, typechecks, tests, builds Next.js, and builds the Docker image. Cloud Run deploy is a separate workflow and runs on pushes to `main` only after the GCP variables are set. It does not affect Vercel, Render, Fly.io, Zeabur, or other container hosts.

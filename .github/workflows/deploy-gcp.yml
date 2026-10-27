@@ -1,0 +1,130 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-gcp-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  not-configured:
+    if: vars.GCP_PROJECT_ID == ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip until GCP is configured
+        run: |
+          echo "GCP_PROJECT_ID is not set. Skipping Cloud Run deploy."
+          echo "Other deploy targets are unchanged. See docs/deploy-gcp.md."
+
+  deploy:
+    if: vars.GCP_PROJECT_ID != ''
+    runs-on: ubuntu-latest
+    env:
+      PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      REGION: ${{ vars.GCP_REGION || 'asia-east1' }}
+      SERVICE: ${{ vars.GCP_SERVICE_NAME || 'xiami' }}
+      REPOSITORY: ${{ vars.GCP_ARTIFACT_REPOSITORY || 'xiami' }}
+      SQL_CONNECTION: ${{ vars.GCP_SQL_CONNECTION_NAME }}
+      RUNTIME_SA: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT }}
+      GCS_BUCKET: ${{ vars.GCS_BUCKET }}
+      APP_URL: ${{ vars.APP_URL }}
+      AUTH_METHOD: ${{ vars.GCP_AUTH_METHOD || 'wif' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required variables
+        run: |
+          missing=()
+          [ -n "$SQL_CONNECTION" ] || missing+=("GCP_SQL_CONNECTION_NAME")
+          [ -n "$RUNTIME_SA" ] || missing+=("GCP_RUNTIME_SERVICE_ACCOUNT")
+          [ -n "$GCS_BUCKET" ] || missing+=("GCS_BUCKET")
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "Missing GitHub variables: ${missing[*]}"
+            echo "See docs/deploy-gcp.md."
+            exit 1
+          fi
+
+      - name: Authenticate with Workload Identity Federation
+        if: env.AUTH_METHOD != 'key'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Authenticate with a service account key
+        if: env.AUTH_METHOD == 'key'
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build and push the image
+        run: |
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+          IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/xiami"
+          docker build -t "${IMAGE}:${GITHUB_SHA}" -t "${IMAGE}:latest" .
+          docker push "${IMAGE}:${GITHUB_SHA}"
+          docker push "${IMAGE}:latest"
+          echo "IMAGE=${IMAGE}:${GITHUB_SHA}" >> "$GITHUB_ENV"
+
+      - name: Migrate with a Cloud Run Job
+        run: |
+          gcloud run jobs deploy "${SERVICE}-migrate" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --image "$IMAGE" \
+            --service-account "$RUNTIME_SA" \
+            --set-cloudsql-instances "$SQL_CONNECTION" \
+            --set-secrets "DATABASE_URL=xiami-database-url:latest" \
+            --command node \
+            --args "/opt/prisma-cli/node_modules/prisma/build/index.js,migrate,deploy" \
+            --max-retries 1 \
+            --task-timeout 10m \
+            --memory 512Mi \
+            --cpu 1 \
+            --quiet
+          gcloud run jobs execute "${SERVICE}-migrate" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --wait
+
+      - name: Deploy the Cloud Run service
+        id: deploy
+        run: |
+          ENV_VARS="STORAGE_DRIVER=gcs,GCS_BUCKET=${GCS_BUCKET},SKIP_MIGRATE=1"
+          if [ -n "$APP_URL" ]; then
+            ENV_VARS="${ENV_VARS},APP_URL=${APP_URL}"
+          fi
+          gcloud run deploy "$SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --image "$IMAGE" \
+            --service-account "$RUNTIME_SA" \
+            --set-cloudsql-instances "$SQL_CONNECTION" \
+            --set-secrets "DATABASE_URL=xiami-database-url:latest,AUTH_SECRET=xiami-auth-secret:latest" \
+            --set-env-vars "$ENV_VARS" \
+            --port 43123 \
+            --allow-unauthenticated \
+            --memory 512Mi \
+            --cpu 1 \
+            --min-instances 0 \
+            --max-instances 4 \
+            --quiet
+          URL="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
+          if [ -z "$APP_URL" ]; then
+            gcloud run services update "$SERVICE" \
+              --project "$PROJECT_ID" \
+              --region "$REGION" \
+              --update-env-vars "APP_URL=${URL}" \
+              --quiet
+          fi
+          echo "url=${URL}" >> "$GITHUB_OUTPUT"
+          echo "Cloud Run URL: ${URL}"
